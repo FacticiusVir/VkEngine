@@ -6,7 +6,18 @@ namespace VkEngine
     {
         static void Main(string[] args)
         {
-            Console.WriteLine(1 << (int)Math.Ceiling(Math.Log(17, 2)));
+            var manager = new PageManager(3);
+
+            for (int loop = 0; loop < 20; loop++)
+            {
+                PageWriteKey key = manager.GetWriteKey();
+
+                Console.WriteLine($"Read Page: {key.ReadPage}");
+                Console.WriteLine($"Write Page: {key.WritePage}");
+                Console.WriteLine();
+
+                manager.Release(key);
+            }
 
             Console.WriteLine("Done");
             Console.ReadLine();

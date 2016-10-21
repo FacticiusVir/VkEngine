@@ -1,11 +1,11 @@
-﻿using GlmSharp;
+﻿using System.Numerics;
 
 namespace VkEngine.Model
 {
     public struct Transform2
     {
-        public vec2 Position;
+        public Vector2 Position;
         public float Rotation;
-        public vec2 Scale;
+        public Vector2 Scale;
     }
 }

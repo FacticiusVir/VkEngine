@@ -4,7 +4,7 @@
     {
         public readonly int ReadPage;
 
-        public PageReadKey(int readPage, int writePage)
+        public PageReadKey(int readPage)
         {
             this.ReadPage = readPage;
         }
