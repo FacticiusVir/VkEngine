@@ -1,47 +1,78 @@
 ﻿using System;
+using System.Runtime.InteropServices;
 
 namespace VkEngine
 {
-    public class PagedStore<T>
-        where T : struct
+    public class PagedStore
+        : IDisposable
     {
-        private T[][] pages;
+        private readonly Type dataType;
+        private readonly uint dataSize;
+        private readonly Page[] pages;
 
-        public PagedStore(int pageCount, int initialCapacity)
+        public PagedStore(int pageCount, Type dataType)
         {
-            this.pages = new T[pageCount][];
-
-            int scaledCapacity = FindScaledCapacity(initialCapacity);
-
-            for (int index = 0; index < pageCount; index++)
-            {
-                this.pages[index] = new T[initialCapacity];
-            }
+            this.dataType = dataType;
+            this.dataSize = MemUtil.SizeOf(dataType);
+            this.pages = new Page[pageCount];
         }
 
         public void UpdateCapacity(PageWriteKey key, int requiredCapacity)
         {
-            if (this.pages[key.WritePage].Length < requiredCapacity)
+            Page writePage = this.pages[key.WritePage];
+
+            if (writePage.Capacity < requiredCapacity)
             {
                 int scaledCapacity = FindScaledCapacity(requiredCapacity);
 
-                this.pages[key.WritePage] = new T[scaledCapacity];
+                long scaledSize = scaledCapacity * this.dataSize;
+
+                Page newPage = new Page
+                {
+                    Capacity = scaledCapacity
+                };
+
+                if (writePage.Data != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(newPage.Data);
+                }
+
+                newPage.Data = Marshal.AllocHGlobal((IntPtr)scaledSize);
+
+                this.pages[key.WritePage] = newPage;
             }
         }
 
-        public T[] GetReadPage(PageWriteKey key)
+        public IntPtr GetReadPage(PageWriteKey key)
         {
-            return this.pages[key.ReadPage];
+            return this.pages[key.ReadPage].Data;
         }
 
-        public T[] GetWritePage(PageWriteKey key)
+        public IntPtr GetWritePage(PageWriteKey key)
         {
-            return this.pages[key.WritePage];
+            return this.pages[key.WritePage].Data;
         }
 
         private int FindScaledCapacity(int minimumCapacity)
         {
             return 1 << (int)Math.Ceiling(Math.Log(minimumCapacity, 2));
+        }
+
+        public void Dispose()
+        {
+            for (int index = 0; index < this.pages.Length; index++)
+            {
+                if (this.pages[index].Data != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(this.pages[index].Data);
+                }
+            }
+        }
+
+        private struct Page
+        {
+            public IntPtr Data;
+            public int Capacity;
         }
     }
 }

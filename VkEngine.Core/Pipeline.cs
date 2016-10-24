@@ -1,15 +1,16 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 
 namespace VkEngine
 {
     public class Pipeline
     {
-        public Pipeline(Delegate pipelineFunction)
+        public Pipeline(MethodInfo pipelineFunction)
         {
-            this.Output = pipelineFunction.Method.ReturnType;
-            this.Inputs = pipelineFunction.Method.GetParameters().Select(param => param.ParameterType).ToArray();
+            this.Output = pipelineFunction.ReturnType;
+            this.Inputs = pipelineFunction.GetParameters().Select(param => param.ParameterType).ToArray();
             this.Function = pipelineFunction;
         }
 
@@ -25,7 +26,7 @@ namespace VkEngine
             private set;
         }
 
-        public Delegate Function
+        public MethodInfo Function
         {
             get;
             private set;

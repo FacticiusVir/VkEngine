@@ -1,26 +1,44 @@
-﻿using System;
+﻿using Sigil;
+using System;
+using System.Numerics;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using VkEngine.Model;
 
 namespace VkEngine
 {
     class Program
     {
-        static void Main(string[] args)
+        static unsafe void Main(string[] args)
         {
-            var manager = new PageManager(3);
+            BindingFlags publicStaticFlags = BindingFlags.Public | BindingFlags.Static;
 
-            for (int loop = 0; loop < 20; loop++)
+            var factory = new EntityFactory()
             {
-                PageWriteKey key = manager.GetWriteKey();
+                BootstrapType = typeof(Vector2),
+                Bootstrap = typeof(Program).GetMethod("Bootstrap", publicStaticFlags),
+                Pipelines = new Pipeline[] { },
+                StateTypes = new[] { typeof(Transform2) }
+            };
+            var manager = new EntityManager(3, factory);
 
-                Console.WriteLine($"Read Page: {key.ReadPage}");
-                Console.WriteLine($"Write Page: {key.WritePage}");
-                Console.WriteLine();
-
-                manager.Release(key);
-            }
+            manager.AddNew(new[] { new Vector2(1, 1) });
 
             Console.WriteLine("Done");
             Console.ReadLine();
+        }
+
+        public static void Bootstrap(Vector2 position, out Transform2 transform)
+        {
+            transform = new Transform2
+            {
+                Position = position
+            };
+        }
+
+        public static void Display(Transform2 transform)
+        {
+
         }
     }
 }

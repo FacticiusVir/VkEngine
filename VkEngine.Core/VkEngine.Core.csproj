@@ -20,6 +20,7 @@
     <DefineConstants>DEBUG;TRACE</DefineConstants>
     <ErrorReport>prompt</ErrorReport>
     <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <DebugType>pdbonly</DebugType>
@@ -45,6 +46,7 @@
     <Compile Include="EntityManager.cs" />
     <Compile Include="EntityService.cs" />
     <Compile Include="LoopStage.cs" />
+    <Compile Include="MemUtil.cs" />
     <Compile Include="Model\Transform2.cs" />
     <Compile Include="PagedStore.cs" />
     <Compile Include="PageReadKey.cs" />
