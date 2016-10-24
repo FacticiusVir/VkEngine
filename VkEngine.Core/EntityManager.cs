@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Sigil;
+using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -12,6 +13,7 @@ namespace VkEngine
         private readonly StatePipeline[] pipelines;
         private readonly Pipeline[] observers;
         private readonly uint bootstrapDataSize;
+        private readonly Action<IntPtr> bootstrapAction;
 
         public EntityManager(int pageCount, EntityFactory factory)
         {
@@ -25,34 +27,62 @@ namespace VkEngine
             }).ToArray();
             this.observers = factory.Pipelines.Where(pipeline => pipeline.Output == typeof(void)).ToArray();
             this.bootstrapDataSize = MemUtil.SizeOf(this.factory.BootstrapType);
+
+            var readFromPtrInfo = typeof(MemUtil).GetMethod("ReadFromPtr").MakeGenericMethod(this.factory.BootstrapType);
+
+            var bootstrapEmitter = Emit<Action<IntPtr>>.NewDynamicMethod();
+
+            Local dataLocal = bootstrapEmitter.DeclareLocal(this.factory.BootstrapType);
+            var resultLocals = this.factory.Bootstrap.GetParameters()
+                                                        .Skip(1)
+                                                        .Select(param => bootstrapEmitter.DeclareLocal(param.ParameterType.GetElementType()))
+                                                        .ToArray();
+
+            bootstrapEmitter.LoadArgument(0)
+                            .LoadLocalAddress(dataLocal)
+                            .Call(readFromPtrInfo)
+                            .LoadLocal(dataLocal);
+
+            foreach(var resultLocal in resultLocals)
+            {
+                bootstrapEmitter.LoadLocalAddress(resultLocal);
+            }
+
+            bootstrapEmitter.Call(this.factory.Bootstrap)
+                            .Return();
+
+            this.bootstrapAction = bootstrapEmitter.CreateDelegate();
         }
 
-        public void AddNew(Array data)
+        public void Start(PageWriteKey key, Array data)
         {
-            GCHandle handle = default(GCHandle);
+            int scaledCapacity = FindScaledCapacity(data.Length);
+
+            for (int index = 0; index < this.pipelines.Length; index++)
+            {
+                this.pipelines[index].Store.UpdateWriteCapacity(key, scaledCapacity);
+            }
+
+            GCHandle dataHandle = default(GCHandle);
 
             try
             {
-                handle = GCHandle.Alloc(data);
+                dataHandle = GCHandle.Alloc(data, GCHandleType.Pinned);
 
-                byte* handlePointer = (byte*)handle.AddrOfPinnedObject().ToPointer();
+                IntPtr handlePointer = dataHandle.AddrOfPinnedObject();
 
                 for (int index = 0; index < data.Length; index++)
                 {
-                    IntPtr dataPointer = Marshal.AllocHGlobal((IntPtr)this.bootstrapDataSize);
-
-                    Buffer.MemoryCopy(handlePointer + (this.bootstrapDataSize * index), dataPointer.ToPointer(), this.bootstrapDataSize, this.bootstrapDataSize);
+                    this.bootstrapAction(handlePointer + (int)(this.bootstrapDataSize * index));
                 }
             }
             finally
             {
-                handle.Free();
+                if(dataHandle.IsAllocated)
+                {
+                    dataHandle.Free();
+                }
             }
-        }
-
-        public void Start(PageWriteKey key)
-        {
-
         }
 
         public void Update()
@@ -74,6 +104,14 @@ namespace VkEngine
             public PagedStore Store;
             public Pipeline Pipeline;
             public ConcurrentQueue<IntPtr>[] NewObjects;
+        }
+
+        private static int FindScaledCapacity(int minimumCapacity)
+        {
+            int padding = minimumCapacity / 10;
+            padding = Math.Max(padding, 16);
+
+            return 1 << (int)Math.Ceiling(Math.Log(minimumCapacity + padding, 2));
         }
     }
 }

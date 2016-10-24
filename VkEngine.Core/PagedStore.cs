@@ -17,32 +17,6 @@ namespace VkEngine
             this.pages = new Page[pageCount];
         }
 
-        public void UpdateCapacity(PageWriteKey key, int requiredCapacity)
-        {
-            Page writePage = this.pages[key.WritePage];
-
-            if (writePage.Capacity < requiredCapacity)
-            {
-                int scaledCapacity = FindScaledCapacity(requiredCapacity);
-
-                long scaledSize = scaledCapacity * this.dataSize;
-
-                Page newPage = new Page
-                {
-                    Capacity = scaledCapacity
-                };
-
-                if (writePage.Data != IntPtr.Zero)
-                {
-                    Marshal.FreeHGlobal(newPage.Data);
-                }
-
-                newPage.Data = Marshal.AllocHGlobal((IntPtr)scaledSize);
-
-                this.pages[key.WritePage] = newPage;
-            }
-        }
-
         public IntPtr GetReadPage(PageWriteKey key)
         {
             return this.pages[key.ReadPage].Data;
@@ -53,9 +27,41 @@ namespace VkEngine
             return this.pages[key.WritePage].Data;
         }
 
-        private int FindScaledCapacity(int minimumCapacity)
+        public int GetWriteCapacity(PageWriteKey key)
         {
-            return 1 << (int)Math.Ceiling(Math.Log(minimumCapacity, 2));
+            return this.pages[key.WritePage].Capacity;
+        }
+
+        public void UpdateWriteCapacity(PageWriteKey key, int requiredCapacity, bool persistPage = false)
+        {
+            Page writePage = this.pages[key.WritePage];
+
+            if (writePage.Capacity < requiredCapacity)
+            {
+                long requiredSize = requiredCapacity * this.dataSize;
+
+                Page newPage = new Page
+                {
+                    Capacity = requiredCapacity
+                };
+
+                if (!persistPage && writePage.Data != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(newPage.Data);
+                    writePage.Data = IntPtr.Zero;
+                }
+
+                if (writePage.Data == IntPtr.Zero)
+                {
+                    newPage.Data = Marshal.AllocHGlobal((IntPtr)requiredSize);
+                }
+                else
+                {
+                    newPage.Data = Marshal.ReAllocHGlobal(writePage.Data, (IntPtr)requiredSize);
+                }
+
+                this.pages[key.WritePage] = newPage;
+            }
         }
 
         public void Dispose()

@@ -22,7 +22,7 @@ namespace VkEngine
             };
             var manager = new EntityManager(3, factory);
 
-            manager.AddNew(new[] { new Vector2(1, 1) });
+            manager.Start(new PageWriteKey(0, 1), new[] { new Vector2(1, 1) });
 
             Console.WriteLine("Done");
             Console.ReadLine();

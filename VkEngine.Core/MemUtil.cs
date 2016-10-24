@@ -5,9 +5,6 @@ using System.Runtime.InteropServices;
 
 namespace VkEngine
 {
-    /// <summary>
-    /// 
-    /// </summary>
     public static class MemUtil
     {
         /// <summary>
@@ -19,11 +16,7 @@ namespace VkEngine
         {
             return SizeOfCache<T>.SizeOf;
         }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <typeparam name="T"></typeparam>
+        
         private static class SizeOfCache<T>
         {
             public static readonly uint SizeOf;
@@ -49,12 +42,22 @@ namespace VkEngine
             return (uint)func();
         }
 
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="dest"></param>
-        /// <param name="value"></param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public unsafe static void ReadFromPtr<T>(IntPtr source, out T value)
+            where T : struct
+        {
+            value = default(T);
+
+            uint size = SizeOf<T>();
+
+            void* pointer = source.ToPointer();
+
+            TypedReference valueReference = __makeref(value);
+            void* valuePointer = (*((IntPtr*)&valueReference)).ToPointer();
+
+            System.Buffer.MemoryCopy(pointer, valuePointer, size, size);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe static void WriteToPtr<T>(IntPtr dest, T value)
             where T : struct
@@ -68,15 +71,7 @@ namespace VkEngine
 
             System.Buffer.MemoryCopy(valuePointer, pointer, size, size);
         }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="dest"></param>
-        /// <param name="value"></param>
-        /// <param name="startIndex"></param>
-        /// <param name="count"></param>
+        
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe static void WriteToPtr<T>(IntPtr dest, T[] value, int startIndex, int count)
             where T : struct
