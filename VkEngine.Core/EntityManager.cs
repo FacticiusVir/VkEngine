@@ -11,9 +11,11 @@ namespace VkEngine
     {
         private readonly EntityFactory factory;
         private readonly StatePipeline[] pipelines;
-        private readonly Pipeline[] observers;
+        private readonly Action<IntPtr[]>[] observers;
         private readonly uint bootstrapDataSize;
-        private readonly Action<IntPtr> bootstrapAction;
+        private readonly Action<IntPtr, IntPtr[]> bootstrapAction;
+
+        private int count;
 
         public EntityManager(int pageCount, EntityFactory factory)
         {
@@ -21,16 +23,58 @@ namespace VkEngine
             this.pipelines = factory.StateTypes.Select(type => new StatePipeline
             {
                 StateType = type,
+                StateTypeSize = (int)MemUtil.SizeOf(type),
                 Store = new PagedStore(pageCount, type),
                 Pipeline = factory.Pipelines.SingleOrDefault(pipeline => pipeline.Output == type),
                 NewObjects = Enumerable.Range(0, pageCount).Select(x => new ConcurrentQueue<IntPtr>()).ToArray()
             }).ToArray();
-            this.observers = factory.Pipelines.Where(pipeline => pipeline.Output == typeof(void)).ToArray();
+            this.observers = factory.Pipelines
+                                    .Where(pipeline => pipeline.Output == typeof(void))
+                                    .Select(this.BuildObserverAction)
+                                    .ToArray();
             this.bootstrapDataSize = MemUtil.SizeOf(this.factory.BootstrapType);
 
+            this.bootstrapAction = this.BuildBootstrapAction();
+        }
+
+        private Action<IntPtr[]> BuildObserverAction(Pipeline observerPipeline)
+        {
+            var observerEmitter = Emit<Action<IntPtr[]>>.NewDynamicMethod();
+
+            var stateLocals = this.pipelines.Select(statePipeline => observerEmitter.DeclareLocal(statePipeline.StateType))
+                                            .ToArray();
+
+            int index = 0;
+
+            foreach (var stateLocal in stateLocals)
+            {
+                var readFromPtrInfo = typeof(MemUtil).GetMethod("ReadFromPtr")
+                                                        .MakeGenericMethod(stateLocal.LocalType);
+
+                observerEmitter.LoadArgument(0)
+                                .LoadConstant(index)
+                                .LoadElement<IntPtr>()
+                                .LoadLocalAddress(stateLocal)
+                                .Call(readFromPtrInfo);
+
+                index++;
+            }
+
+            foreach (var stateLocal in stateLocals)
+            {
+                observerEmitter.LoadLocal(stateLocal);
+            }
+
+            return observerEmitter.Call(observerPipeline.Function)
+                                    .Return()
+                                    .CreateDelegate();
+        }
+
+        private Action<IntPtr, IntPtr[]> BuildBootstrapAction()
+        {
             var readFromPtrInfo = typeof(MemUtil).GetMethod("ReadFromPtr").MakeGenericMethod(this.factory.BootstrapType);
 
-            var bootstrapEmitter = Emit<Action<IntPtr>>.NewDynamicMethod();
+            var bootstrapEmitter = Emit<Action<IntPtr, IntPtr[]>>.NewDynamicMethod();
 
             Local dataLocal = bootstrapEmitter.DeclareLocal(this.factory.BootstrapType);
             var resultLocals = this.factory.Bootstrap.GetParameters()
@@ -43,15 +87,31 @@ namespace VkEngine
                             .Call(readFromPtrInfo)
                             .LoadLocal(dataLocal);
 
-            foreach(var resultLocal in resultLocals)
+            foreach (var resultLocal in resultLocals)
             {
                 bootstrapEmitter.LoadLocalAddress(resultLocal);
             }
 
-            bootstrapEmitter.Call(this.factory.Bootstrap)
-                            .Return();
+            bootstrapEmitter.Call(this.factory.Bootstrap);
 
-            this.bootstrapAction = bootstrapEmitter.CreateDelegate();
+            int localIndex = 0;
+
+            foreach (var resultLocal in resultLocals)
+            {
+                var writeToPtrInfo = typeof(MemUtil).GetMethods()
+                                                    .Single(x => x.Name == "WriteToPtr" && x.GetParameters().Length == 2)
+                                                    .MakeGenericMethod(resultLocal.LocalType);
+
+                bootstrapEmitter.LoadArgument(1);
+                bootstrapEmitter.LoadConstant(localIndex);
+                bootstrapEmitter.LoadElement<IntPtr>();
+                bootstrapEmitter.LoadLocal(resultLocal);
+                bootstrapEmitter.Call(writeToPtrInfo);
+
+                localIndex++;
+            }
+
+            return bootstrapEmitter.Return().CreateDelegate();
         }
 
         public void Start(PageWriteKey key, Array data)
@@ -73,21 +133,53 @@ namespace VkEngine
 
                 for (int index = 0; index < data.Length; index++)
                 {
-                    this.bootstrapAction(handlePointer + (int)(this.bootstrapDataSize * index));
+                    this.BootstrapEntity(key, index, handlePointer + (int)(this.bootstrapDataSize * index));
                 }
+
+                this.count = data.Length;
             }
             finally
             {
-                if(dataHandle.IsAllocated)
+                if (dataHandle.IsAllocated)
                 {
                     dataHandle.Free();
                 }
             }
         }
 
-        public void Update()
+        private void BootstrapEntity(PageWriteKey key, int entityId, IntPtr dataPointer)
         {
+            var resultArray = new IntPtr[this.pipelines.Length];
 
+            for (int pipelineIndex = 0; pipelineIndex < this.pipelines.Length; pipelineIndex++)
+            {
+                resultArray[pipelineIndex] = this.pipelines[pipelineIndex].Store.GetWritePage(key) + (this.pipelines[pipelineIndex].StateTypeSize * entityId);
+            }
+
+            this.bootstrapAction(dataPointer, resultArray);
+        }
+
+        public void Update(PageWriteKey key)
+        {
+            var stateArray = new IntPtr[this.pipelines.Length];
+
+            for (int pipelineIndex = 0; pipelineIndex < this.pipelines.Length; pipelineIndex++)
+            {
+                stateArray[pipelineIndex] = this.pipelines[pipelineIndex].Store.GetReadPage(key);
+            }
+
+            for (int entityIndex = 0; entityIndex < this.count; entityIndex++)
+            {
+                for (int observerIndex = 0; observerIndex < this.observers.Length; observerIndex++)
+                {
+                    this.observers[observerIndex](stateArray);
+                }
+
+                for (int pipelineIndex = 0; pipelineIndex < this.pipelines.Length; pipelineIndex++)
+                {
+                    stateArray[pipelineIndex] += this.pipelines[pipelineIndex].StateTypeSize;
+                }
+            }
         }
 
         public void Dispose()
@@ -101,6 +193,7 @@ namespace VkEngine
         private struct StatePipeline
         {
             public Type StateType;
+            public int StateTypeSize;
             public PagedStore Store;
             public Pipeline Pipeline;
             public ConcurrentQueue<IntPtr>[] NewObjects;
