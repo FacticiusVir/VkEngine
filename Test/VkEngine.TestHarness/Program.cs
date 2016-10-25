@@ -17,13 +17,23 @@ namespace VkEngine
                 {
                     new Pipeline(typeof(Program).GetMethod("Display"))
                 },
-                StateTypes = new[] { typeof(Transform2) }
+                StateTypes = new[] { typeof(Vector2), typeof(Transform2) }
             };
+
             var manager = new EntityManager(3, factory);
+            var pageManager = new PageManager(3);
 
-            manager.Start(new PageWriteKey(0, 1), new[] { new Vector2(1, 1), new Vector2(32, 24) });
+            PageWriteKey key = pageManager.GetWriteKey();
 
-            manager.Update(new PageWriteKey(1, 2));
+            manager.Start(key, new[] { new Vector2(1, 1), new Vector2(32, 24) });
+
+            pageManager.Release(key);
+
+            key = pageManager.GetWriteKey();
+
+            manager.Update(key);
+
+            pageManager.Release(key);
 
             Console.WriteLine("Done");
             Console.ReadLine();
@@ -37,9 +47,10 @@ namespace VkEngine
             };
         }
 
-        public static void Display(Transform2 transform)
+        public static void Display(Transform2 transform, Vector2 velocity)
         {
             Console.WriteLine($"Position: {transform.Position}");
+            Console.WriteLine($"Velocity: {velocity}");
         }
     }
 }

@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Collections.Generic;
 
 namespace VkEngine
 {
@@ -13,6 +14,7 @@ namespace VkEngine
         private readonly StatePipeline[] pipelines;
         private readonly Action<IntPtr[]>[] observers;
         private readonly uint bootstrapDataSize;
+        private readonly Dictionary<Type, int> stateTypeIndices;
         private readonly Action<IntPtr, IntPtr[]> bootstrapAction;
 
         private int count;
@@ -20,13 +22,16 @@ namespace VkEngine
         public EntityManager(int pageCount, EntityFactory factory)
         {
             this.factory = factory;
+
+            this.stateTypeIndices = factory.StateTypes.Select((x, y) => Tuple.Create(x, y))
+                                                        .ToDictionary(x => x.Item1, x => x.Item2);
+
             this.pipelines = factory.StateTypes.Select(type => new StatePipeline
             {
                 StateType = type,
                 StateTypeSize = (int)MemUtil.SizeOf(type),
                 Store = new PagedStore(pageCount, type),
-                Pipeline = factory.Pipelines.SingleOrDefault(pipeline => pipeline.Output == type),
-                NewObjects = Enumerable.Range(0, pageCount).Select(x => new ConcurrentQueue<IntPtr>()).ToArray()
+                Pipeline = this.BuildStatePipeline(factory.Pipelines.SingleOrDefault(pipeline => pipeline.Output == type))
             }).ToArray();
             this.observers = factory.Pipelines
                                     .Where(pipeline => pipeline.Output == typeof(void))
@@ -37,14 +42,51 @@ namespace VkEngine
             this.bootstrapAction = this.BuildBootstrapAction();
         }
 
+        private Action<IntPtr, IntPtr[]> BuildStatePipeline(Pipeline statePipeline)
+        {
+            var pipelineEmitter = Emit<Action<IntPtr, IntPtr[]>>.NewDynamicMethod();
+
+            var writeLocal = pipelineEmitter.DeclareLocal(statePipeline.Output);
+            var readLocals = statePipeline.Inputs
+                                            .Select(input => pipelineEmitter.DeclareLocal(input))
+                                            .ToArray();
+
+            foreach (var stateLocal in readLocals)
+            {
+                var readFromPtrInfo = typeof(MemUtil).GetMethod("ReadFromPtr")
+                                                        .MakeGenericMethod(stateLocal.LocalType);
+
+                pipelineEmitter.LoadArgument(1)
+                                .LoadConstant(this.stateTypeIndices[stateLocal.LocalType])
+                                .LoadElement<IntPtr>()
+                                .LoadLocalAddress(stateLocal)
+                                .Call(readFromPtrInfo);
+            }
+
+            foreach (var stateLocal in readLocals)
+            {
+                pipelineEmitter.LoadLocal(stateLocal);
+            }
+
+            var writeToPtrInfo = typeof(MemUtil).GetMethods()
+                                                .Single(x => x.Name == "WriteToPtr" && x.GetParameters().Length == 2)
+                                                .MakeGenericMethod(statePipeline.Output);
+
+            pipelineEmitter.Call(statePipeline.Function)
+                            .StoreLocal(writeLocal)
+                            .LoadArgument(0)
+                            .LoadLocal(writeLocal);
+
+            return pipelineEmitter.Return().CreateDelegate();
+        }
+
         private Action<IntPtr[]> BuildObserverAction(Pipeline observerPipeline)
         {
             var observerEmitter = Emit<Action<IntPtr[]>>.NewDynamicMethod();
 
-            var stateLocals = this.pipelines.Select(statePipeline => observerEmitter.DeclareLocal(statePipeline.StateType))
-                                            .ToArray();
-
-            int index = 0;
+            var stateLocals = observerPipeline.Inputs
+                                                .Select(input => observerEmitter.DeclareLocal(input))
+                                                .ToArray();
 
             foreach (var stateLocal in stateLocals)
             {
@@ -52,12 +94,10 @@ namespace VkEngine
                                                         .MakeGenericMethod(stateLocal.LocalType);
 
                 observerEmitter.LoadArgument(0)
-                                .LoadConstant(index)
+                                .LoadConstant(this.stateTypeIndices[stateLocal.LocalType])
                                 .LoadElement<IntPtr>()
                                 .LoadLocalAddress(stateLocal)
                                 .Call(readFromPtrInfo);
-
-                index++;
             }
 
             foreach (var stateLocal in stateLocals)
@@ -94,8 +134,6 @@ namespace VkEngine
 
             bootstrapEmitter.Call(this.factory.Bootstrap);
 
-            int localIndex = 0;
-
             foreach (var resultLocal in resultLocals)
             {
                 var writeToPtrInfo = typeof(MemUtil).GetMethods()
@@ -103,12 +141,10 @@ namespace VkEngine
                                                     .MakeGenericMethod(resultLocal.LocalType);
 
                 bootstrapEmitter.LoadArgument(1);
-                bootstrapEmitter.LoadConstant(localIndex);
+                bootstrapEmitter.LoadConstant(this.stateTypeIndices[resultLocal.LocalType]);
                 bootstrapEmitter.LoadElement<IntPtr>();
                 bootstrapEmitter.LoadLocal(resultLocal);
                 bootstrapEmitter.Call(writeToPtrInfo);
-
-                localIndex++;
             }
 
             return bootstrapEmitter.Return().CreateDelegate();
@@ -190,21 +226,20 @@ namespace VkEngine
             }
         }
 
-        private struct StatePipeline
-        {
-            public Type StateType;
-            public int StateTypeSize;
-            public PagedStore Store;
-            public Pipeline Pipeline;
-            public ConcurrentQueue<IntPtr>[] NewObjects;
-        }
-
         private static int FindScaledCapacity(int minimumCapacity)
         {
             int padding = minimumCapacity / 10;
             padding = Math.Max(padding, 16);
 
             return 1 << (int)Math.Ceiling(Math.Log(minimumCapacity + padding, 2));
+        }
+
+        private struct StatePipeline
+        {
+            public Type StateType;
+            public int StateTypeSize;
+            public PagedStore Store;
+            public Action<IntPtr, IntPtr[]> Pipeline;
         }
     }
 }
