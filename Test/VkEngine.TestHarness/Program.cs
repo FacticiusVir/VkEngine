@@ -15,7 +15,8 @@ namespace VkEngine
                 Bootstrap = typeof(Program).GetMethod("Bootstrap"),
                 Pipelines = new[]
                 {
-                    new Pipeline(typeof(Program).GetMethod("Display"))
+                    new Pipeline(typeof(Program).GetMethod("Display")),
+                    new Pipeline(typeof(Program).GetMethod("Update"))
                 },
                 StateTypes = new[] { typeof(Vector2), typeof(Transform2) }
             };
@@ -32,6 +33,21 @@ namespace VkEngine
             key = pageManager.GetWriteKey();
 
             manager.Update(key);
+            Console.WriteLine();
+
+            pageManager.Release(key);
+
+            key = pageManager.GetWriteKey();
+
+            manager.Update(key);
+            Console.WriteLine();
+
+            pageManager.Release(key);
+
+            key = pageManager.GetWriteKey();
+
+            manager.Update(key);
+            Console.WriteLine();
 
             pageManager.Release(key);
 
@@ -47,10 +63,18 @@ namespace VkEngine
             };
         }
 
+        public static Transform2 Update(Transform2 transform, Vector2 velocity)
+        {
+            transform.Position += velocity;
+
+            return transform;
+        }
+
         public static void Display(Transform2 transform, Vector2 velocity)
         {
             Console.WriteLine($"Position: {transform.Position}");
             Console.WriteLine($"Velocity: {velocity}");
+            Console.WriteLine();
         }
     }
 }
