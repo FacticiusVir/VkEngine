@@ -1,14 +1,12 @@
 ﻿using Sigil;
 using System;
-using System.Collections.Concurrent;
-using System.Linq;
-using System.Runtime.InteropServices;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace VkEngine
 {
     public unsafe class EntityManager
-        : IDisposable
+        : IDisposable, IUpdatable
     {
         private readonly EntityFactory factory;
         private readonly StatePipeline[] pipelines;
@@ -17,11 +15,15 @@ namespace VkEngine
         private readonly Dictionary<Type, int> stateTypeIndices;
         private readonly Action<IntPtr, IntPtr[]> bootstrapAction;
 
-        private int count;
+        private readonly object countLock = new object();
+        private readonly PagedProperty<int> count;
+        private readonly PagedProperty<int> capacity;
 
         public EntityManager(int pageCount, EntityFactory factory)
         {
             this.factory = factory;
+            this.count = new PagedProperty<int>(pageCount);
+            this.capacity = new PagedProperty<int>(pageCount);
 
             this.stateTypeIndices = factory.StateTypes.Select((x, y) => Tuple.Create(x, y))
                                                         .ToDictionary(x => x.Item1, x => x.Item2);
@@ -135,7 +137,7 @@ namespace VkEngine
                             .LoadLocalAddress(dataLocal)
                             .Call(readFromPtrInfo)
                             .LoadLocal(dataLocal);
-            
+
             foreach (var local in resultTypes.Select(x => stateLocals.Single(y => x == y.LocalType)))
             {
                 bootstrapEmitter.LoadLocalAddress(local);
@@ -159,37 +161,29 @@ namespace VkEngine
             return bootstrapEmitter.Return().CreateDelegate();
         }
 
-        public void Start(PageWriteKey key, Array data)
+        public int Add(PageWriteKey key, IntPtr data)
         {
-            int scaledCapacity = FindScaledCapacity(data.Length);
+            int entityID;
 
-            for (int index = 0; index < this.pipelines.Length; index++)
+            lock (this.countLock)
             {
-                this.pipelines[index].Store.UpdateWriteCapacity(key, scaledCapacity);
-            }
+                entityID = this.count.GetNew(key);
 
-            GCHandle dataHandle = default(GCHandle);
+                int newCount = entityID + 1;
 
-            try
-            {
-                dataHandle = GCHandle.Alloc(data, GCHandleType.Pinned);
-
-                IntPtr handlePointer = dataHandle.AddrOfPinnedObject();
-
-                for (int index = 0; index < data.Length; index++)
+                if (newCount > this.capacity.GetNew(key))
                 {
-                    this.BootstrapEntity(key, index, handlePointer + (int)(this.bootstrapDataSize * index));
+                    //TODO Handle overflow of capacity with queue
+
+                    throw new Exception("Too many entities created per frame.");
                 }
 
-                this.count = data.Length;
+                this.count.Set(key, newCount);
             }
-            finally
-            {
-                if (dataHandle.IsAllocated)
-                {
-                    dataHandle.Free();
-                }
-            }
+
+            this.BootstrapEntity(key, entityID, data);
+
+            return entityID;
         }
 
         private void BootstrapEntity(PageWriteKey key, int entityId, IntPtr dataPointer)
@@ -204,20 +198,36 @@ namespace VkEngine
             this.bootstrapAction(dataPointer, resultArray);
         }
 
+        public void StartUpdate(PageWriteKey key)
+        {
+            int previousCount = this.count.Copy(key);
+            int newCapacity = FindScaledCapacity(previousCount);
+            this.capacity.Set(key, newCapacity);
+
+            for (int pipelineIndex = 0; pipelineIndex < this.pipelines.Length; pipelineIndex++)
+            {
+                this.pipelines[pipelineIndex].Store.UpdateWriteCapacity(key, newCapacity);
+            }
+        }
+
         public void Update(PageWriteKey key)
         {
             var readArray = new IntPtr[this.pipelines.Length];
             var writeArray = new IntPtr[this.pipelines.Length];
 
+            int previousCount;
+            lock (this.countLock)
+            {
+                previousCount = this.count.Get(key);
+            }
+
             for (int pipelineIndex = 0; pipelineIndex < this.pipelines.Length; pipelineIndex++)
             {
-                this.pipelines[pipelineIndex].Store.UpdateWriteCapacity(key, this.count);
-
                 readArray[pipelineIndex] = this.pipelines[pipelineIndex].Store.GetReadPage(key);
                 writeArray[pipelineIndex] = this.pipelines[pipelineIndex].Store.GetWritePage(key);
             }
 
-            for (int entityIndex = 0; entityIndex < this.count; entityIndex++)
+            for (int entityIndex = 0; entityIndex < previousCount; entityIndex++)
             {
                 for (int observerIndex = 0; observerIndex < this.observers.Length; observerIndex++)
                 {
